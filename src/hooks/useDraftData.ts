@@ -48,10 +48,36 @@ const INITIAL_DRAFT_STATE: DraftState = {
 
 export function useDraftData() {
   const { socket } = useSocket();
-  const [players] = useState<Player[]>(MOCK_PLAYERS);
+  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
   const [teams, setTeams] = useState<Team[]>(MOCK_TEAMS);
   const [draftState, setDraftState] = useState<DraftState>(INITIAL_DRAFT_STATE);
   const [loading] = useState(false);
+
+  // Load players from server on mount
+  useEffect(() => {
+    console.log('Loading players from server...');
+    const loadPlayers = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/api/players');
+        console.log('Players API response status:', response.status);
+        if (response.ok) {
+          const serverPlayers = await response.json();
+          console.log('Received players from server:', serverPlayers.length);
+          if (serverPlayers && serverPlayers.length > 0) {
+            setPlayers(serverPlayers);
+          } else {
+            console.log('No players received from server, using mock data');
+          }
+        } else {
+          console.log('Failed to fetch players, using mock data');
+        }
+      } catch (error) {
+        console.log('Error fetching players, using mock data:', error);
+      }
+    };
+    
+    loadPlayers();
+  }, []);
 
   // Socket event listeners
   useEffect(() => {

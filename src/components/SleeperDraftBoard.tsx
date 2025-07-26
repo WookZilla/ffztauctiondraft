@@ -101,13 +101,17 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
   }, [socket, user]);
   // Filter players based on current filters
   const filteredPlayers = players.filter(player => {
+    console.log('Filtering player:', player.name, 'isDrafted:', draftState.draftedPlayers.some(dp => dp.player.id === player.id));
     const matchesSearch = player.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesPosition = positionFilter === 'ALL' || player.position === positionFilter;
     const matchesWatchlist = !showWatchlist || watchlist.includes(player.id);
-    const matchesDrafted = !showDrafted || draftState.draftedPlayers.some(dp => dp.player.id === player.id);
+    const isDrafted = draftState.draftedPlayers.some(dp => dp.player.id === player.id);
+    const matchesDrafted = showDrafted || !isDrafted;
     const matchesRookies = !showRookies || (player.experience && player.experience <= 1);
     
-    return matchesSearch && matchesPosition && matchesWatchlist && !matchesDrafted && !matchesRookies;
+    const shouldShow = matchesSearch && matchesPosition && matchesWatchlist && matchesDrafted && (!showRookies || matchesRookies);
+    console.log('Player filter result for', player.name, ':', shouldShow);
+    return shouldShow;
   }).slice(0, 20);
 
   const canNominate = draftState.currentNominator === userTeam?.id && !draftState.isActive && draftState.isStarted && !draftState.isPaused;
@@ -192,6 +196,13 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
     );
   }
 
+  console.log('Draft state:', draftState);
+  console.log('Total players loaded:', players.length);
+  console.log('Filtered players:', filteredPlayers.length);
+  console.log('Show drafted:', showDrafted);
+  console.log('Position filter:', positionFilter);
+  console.log('Search term:', searchTerm);
+
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
@@ -211,7 +222,7 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
             </div>
             {isMyTurn && canNominate && (
               <div className="bg-orange-500 text-white px-3 py-1 rounded-full text-sm font-bold animate-pulse">
-                YOUR TURN TO NOMINATE
+                {draftState.isNominationPhase ? 'NOMINATE NOW!' : 'YOUR TURN TO NOMINATE'}
               </div>
             )}
           </div>
@@ -288,12 +299,20 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
               <div
                 key={team.id}
                 className={`bg-gray-800 rounded-lg p-3 border ${
-                  team.ownerId === user?.id ? 'border-orange-500' : 'border-gray-700'
+                  team.ownerId === user?.id 
+                    ? 'border-orange-500' 
+                    : draftState.highestBid?.teamId === team.id && draftState.isActive
+                    ? 'border-green-400 bg-green-900/20'
+                    : 'border-gray-700'
                 }`}
               >
                 <div className="text-center mb-2">
                   <div className={`w-8 h-8 rounded-full mx-auto mb-1 flex items-center justify-center text-xs font-bold ${
-                    team.ownerId === user?.id ? 'bg-orange-500' : 'bg-gray-600'
+                    team.ownerId === user?.id 
+                      ? 'bg-orange-500' 
+                      : draftState.highestBid?.teamId === team.id && draftState.isActive
+                      ? 'bg-green-400'
+                      : 'bg-gray-600'
                   }`}>
                     {team.name.charAt(0)}
                   </div>
@@ -302,12 +321,104 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                     <span className="text-white font-semibold">MAX ${team.budget}</span>
                   </div>
                   
-                  {draftState.highestBid?.teamId === team.id && (
-                    <div className="text-xs text-green-400 font-bold">
+                  {draftState.highestBid?.teamId === team.id && draftState.isActive && (
+                    <div className="text-xs text-green-400 font-bold animate-pulse">
                       HIGH BID: ${draftState.highestBid.amount}
                     </div>
                   )}
                 </div>
+
+                {/* Team Bidding Controls */}
+                {draftState.isActive && draftState.nominatedPlayer && (
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center space-x-1">
+                      <DollarSign className="w-3 h-3 text-gray-400" />
+                      <input
+                        type="number"
+                        value={team.ownerId === user?.id ? bidAmount : (draftState.highestBid?.amount || 0) + 1}
+                        onChange={(e) => {
+                          if (team.ownerId === user?.id) {
+                            setBidAmount(parseInt(e.target.value) || 1);
+                          }
+                        }}
+                        min={(draftState.highestBid?.amount || 0) + 1}
+                        max={team.budget}
+                        disabled={
+                          team.ownerId !== user?.id || 
+                          draftState.highestBid?.teamId === team.id ||
+                          !canBid
+                        }
+                        className={`w-full text-xs px-1 py-1 rounded border text-center ${
+                          team.ownerId !== user?.id || draftState.highestBid?.teamId === team.id || !canBid
+                            ? 'bg-gray-600 border-gray-500 text-gray-400 cursor-not-allowed'
+                            : 'bg-gray-700 border-gray-600 text-white focus:border-blue-500'
+                        }`}
+                        readOnly={team.ownerId !== user?.id}
+                      />
+                    </div>
+                    
+                    {/* Quick Bid Buttons */}
+                    {team.ownerId === user?.id && (
+                      <div className="flex space-x-1">
+                        {[1, 5, 10].map(increment => {
+                          const quickBidAmount = (draftState.highestBid?.amount || 0) + increment;
+                          const isDisabled = 
+                            draftState.highestBid?.teamId === team.id ||
+                            !canBid ||
+                            quickBidAmount > team.budget;
+                          
+                          return (
+                            <button
+                              key={increment}
+                              onClick={() => handleBid(quickBidAmount)}
+                              disabled={isDisabled}
+                              className={`flex-1 text-xs py-1 rounded font-bold transition-colors ${
+                                isDisabled
+                                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                              }`}
+                            >
+                              +{increment}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    
+                    {/* Bid Button */}
+                    {team.ownerId === user?.id && (
+                      <button
+                        onClick={() => handleBid(bidAmount)}
+                        disabled={
+                          draftState.highestBid?.teamId === team.id ||
+                          !canBid ||
+                          bidAmount <= (draftState.highestBid?.amount || 0) ||
+                          bidAmount > team.budget
+                        }
+                        className={`w-full text-xs py-1 rounded font-bold transition-colors ${
+                          draftState.highestBid?.teamId === team.id ||
+                          !canBid ||
+                          bidAmount <= (draftState.highestBid?.amount || 0) ||
+                          bidAmount > team.budget
+                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                            : 'bg-green-600 hover:bg-green-700 text-white'
+                        }`}
+                      >
+                        {draftState.highestBid?.teamId === team.id ? 'HIGHEST BID' : 'BID'}
+                      </button>
+                    )}
+                    
+                    {/* Other teams' bid buttons (disabled) */}
+                    {team.ownerId !== user?.id && (
+                      <button
+                        disabled
+                        className="w-full text-xs py-1 rounded font-bold bg-gray-600 text-gray-400 cursor-not-allowed"
+                      >
+                        {draftState.highestBid?.teamId === team.id ? 'HIGHEST BID' : 'BID'}
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Position slots */}
                 <div className="space-y-1">
@@ -341,7 +452,40 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
           </div>
 
           {/* Current Auction */}
-          {draftState.nominatedPlayer && (
+          {draftState.isNominationPhase ? (
+            <div className="bg-gray-800 rounded-lg p-6 mb-4">
+              <div className="text-center">
+                <div className="flex items-center justify-center space-x-4 mb-4">
+                  <div className="text-center">
+                    <div className={`text-3xl font-bold font-mono ${
+                      draftState.timeRemaining <= 5 ? 'text-red-400' : 'text-orange-400'
+                    }`}>
+                      {draftState.timeRemaining}
+                    </div>
+                    <div className="text-xs text-gray-400">NOMINATION TIME</div>
+                  </div>
+                </div>
+                
+                <h2 className="text-2xl font-bold mb-2">
+                  {isMyTurn ? 'Your Turn to Nominate' : 'Waiting for Nomination'}
+                </h2>
+                
+                <div className="text-gray-400 mb-4">
+                  {isMyTurn ? (
+                    <p>Select a player from the pool below to nominate</p>
+                  ) : (
+                    <p>Waiting for {teams.find(t => t.id === draftState.currentNominator)?.name} to nominate</p>
+                  )}
+                </div>
+                
+                {isMyTurn && (
+                  <div className="bg-orange-500 text-white px-4 py-2 rounded-lg inline-block font-bold">
+                    YOU'RE UP! NOMINATE A PLAYER
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : draftState.nominatedPlayer ? (
             <div className="bg-gray-800 rounded-lg p-6 mb-4">
               <div className="flex items-center space-x-4 mb-4">
                 {draftState.nominatedPlayer.photoUrl ? (
@@ -410,55 +554,32 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                   </div>
                 </div>
 
-                {/* Bidding Controls */}
+                {/* Central Bidding Display */}
                 <div className="flex items-center space-x-4">
                   {/* Timer Display */}
                   <div className="text-center">
                     <div className={`text-3xl font-bold font-mono ${
-                      team.ownerId === user?.id ? 'bg-orange-500' : 
-                      draftState.highestBid?.teamId === team.id ? 'bg-green-500' : 'bg-gray-600'
+                      draftState.timeRemaining <= 10 ? 'text-red-400' : 'text-green-400'
                     }`}>
                       {draftState.timeRemaining}
                     </div>
-                    <div className="text-xs text-gray-400">SECONDS</div>
+                    <div className="text-xs text-gray-400">AUCTION TIME</div>
                   </div>
                   
-                  <div className="text-center">
+                  <div className={`text-center p-4 rounded-lg border-2 ${
+                    draftState.highestBid ? 'border-green-400 bg-green-900/20' : 'border-gray-600'
+                  }`}>
                     <div className="text-2xl font-bold text-green-400">
                       ${draftState.highestBid?.amount || 1}
                     </div>
                     <div className="text-sm text-gray-400">
-                      {draftState.highestBid?.teamName || 'Starting bid'}
+                      {draftState.highestBid ? `${draftState.highestBid.teamName} - HIGHEST BID` : 'Starting bid'}
                     </div>
                   </div>
-                  
-                  {canBid && (
-                    <>
-                      <div className="flex items-center space-x-2">
-                        <DollarSign className="w-5 h-5 text-gray-400" />
-                        <input
-                          type="number"
-                          value={bidAmount}
-                          onChange={(e) => setBidAmount(parseInt(e.target.value) || 1)}
-                          min={(draftState.highestBid?.amount || 0) + 1}
-                          max={userTeam?.budget || 200}
-                          className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-center text-white"
-                        />
-                      </div>
-                      
-                      <button
-                        onClick={() => handleBid(bidAmount)}
-                        disabled={bidAmount <= (draftState.highestBid?.amount || 0) || bidAmount > (userTeam?.budget || 0)}
-                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed px-6 py-3 rounded-full font-bold transition-colors"
-                      >
-                        BID ${bidAmount}
-                      </button>
-                    </>
-                  )}
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* Player List */}
           <div className={`bg-gray-800 rounded-lg ${

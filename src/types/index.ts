@@ -57,6 +57,7 @@ export interface DraftState {
   isActive: boolean;
   isPaused: boolean;
   isStarted: boolean;
+  isNominationPhase: boolean;
   startingPrice: number;
   nominationOrder: string[];
   draftedPlayers: Array<{

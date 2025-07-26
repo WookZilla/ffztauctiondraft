@@ -160,6 +160,7 @@ db.serialize(() => {
 // Store active draft rooms and their states
 const draftRooms = new Map();
 const timers = new Map();
+const nominationTimers = new Map();
 
 // Mock player data
 async function createMockPlayerData() {
@@ -284,10 +285,13 @@ io.on('connection', (socket) => {
     const randomTeamIndex = Math.floor(Math.random() * roomState.teams.length);
     roomState.draftState.currentNominator = roomState.teams[randomTeamIndex].id;
     roomState.draftState.nominationOrder = [roomState.teams[randomTeamIndex].id];
+    roomState.draftState.timeRemaining = 15; // 15 seconds for nomination
+    roomState.draftState.isNominationPhase = true;
     
     console.log(`First nominator: ${roomState.teams[randomTeamIndex].name}`);
     
     draftRooms.set(roomId, roomState);
+    startNominationTimer(roomId);
     io.to(roomId).emit('draft-started', roomState.draftState);
     io.to(roomId).emit('room-updated', roomState);
     console.log(`Draft started in room ${roomId} by ${socket.userData.username}`);
@@ -297,7 +301,7 @@ io.on('connection', (socket) => {
   socket.on('nominate-player', (roomId, player, startingPrice = 1) => {
     const roomState = draftRooms.get(roomId) || createDefaultRoomState();
     
-    if (!roomState.draftState.isStarted || roomState.draftState.isPaused) {
+    if (!roomState.draftState.isStarted || roomState.draftState.isPaused || !roomState.draftState.isNominationPhase) {
       socket.emit('error', 'Draft is not active');
       return;
     }
@@ -306,6 +310,12 @@ io.on('connection', (socket) => {
     if (!nominatingTeam || nominatingTeam.id !== roomState.draftState.currentNominator) {
       socket.emit('error', 'It is not your turn to nominate');
       return;
+    }
+    
+    // Stop nomination timer
+    if (nominationTimers.has(roomId)) {
+      clearInterval(nominationTimers.get(roomId));
+      nominationTimers.delete(roomId);
     }
     
     const validStartingPrice = Math.max(1, Math.min(startingPrice, nominatingTeam.budget));
@@ -322,8 +332,9 @@ io.on('connection', (socket) => {
       amount: validStartingPrice,
       timestamp: Date.now()
     };
-    roomState.draftState.timeRemaining = 30;
+    roomState.draftState.timeRemaining = 60; // 60 seconds for bidding
     roomState.draftState.isActive = true;
+    roomState.draftState.isNominationPhase = false;
     roomState.draftState.startingPrice = validStartingPrice;
     
     draftRooms.set(roomId, roomState);
@@ -364,7 +375,11 @@ io.on('connection', (socket) => {
 
     roomState.draftState.currentBids.push(newBid);
     roomState.draftState.highestBid = newBid;
-    roomState.draftState.timeRemaining = Math.max(5, roomState.draftState.timeRemaining);
+    
+    // Reset timer to 10 seconds if under 10 seconds, otherwise keep current time
+    if (roomState.draftState.timeRemaining < 10) {
+      roomState.draftState.timeRemaining = 10;
+    }
 
     draftRooms.set(roomId, roomState);
     startAuctionTimer(roomId);
@@ -418,6 +433,37 @@ io.on('connection', (socket) => {
   });
 });
 
+// Nomination timer management
+function startNominationTimer(roomId) {
+  if (nominationTimers.has(roomId)) {
+    clearInterval(nominationTimers.get(roomId));
+  }
+
+  const roomState = draftRooms.get(roomId);
+  if (!roomState || !roomState.draftState.isStarted || roomState.draftState.isPaused || !roomState.draftState.isNominationPhase) return;
+
+  const timer = setInterval(() => {
+    roomState.draftState.timeRemaining--;
+    
+    if (roomState.draftState.timeRemaining === 10) {
+      io.to(roomId).emit('timer-warning', { timeRemaining: 10, message: '10 seconds to nominate!' });
+    } else if (roomState.draftState.timeRemaining === 5) {
+      io.to(roomId).emit('timer-warning', { timeRemaining: 5, message: '5 seconds to nominate!' });
+    }
+    
+    if (roomState.draftState.timeRemaining <= 0) {
+      // Auto-nominate a random player if time runs out
+      autoNominatePlayer(roomId);
+      clearInterval(timer);
+      nominationTimers.delete(roomId);
+    } else {
+      io.to(roomId).emit('timer-update', roomState.draftState.timeRemaining);
+    }
+  }, 1000);
+
+  nominationTimers.set(roomId, timer);
+}
+
 // Timer management
 function startAuctionTimer(roomId) {
   if (timers.has(roomId)) {
@@ -448,6 +494,43 @@ function startAuctionTimer(roomId) {
   timers.set(roomId, timer);
 }
 
+function autoNominatePlayer(roomId) {
+  const roomState = draftRooms.get(roomId);
+  if (!roomState) return;
+
+  // Get available players (not drafted)
+  db.all('SELECT * FROM players WHERE isDrafted = 0 ORDER BY rank ASC LIMIT 1', (err, players) => {
+    if (err || !players || players.length === 0) return;
+
+    const player = players[0];
+    const nominatingTeam = roomState.teams.find(team => team.id === roomState.draftState.currentNominator);
+    
+    if (nominatingTeam) {
+      roomState.draftState.nominatedPlayer = player;
+      roomState.draftState.currentBids = [];
+      roomState.draftState.highestBid = {
+        id: `auto-bid-${Date.now()}`,
+        playerId: player.id,
+        userId: nominatingTeam.ownerId,
+        username: 'AUTO',
+        teamName: nominatingTeam.name,
+        teamId: nominatingTeam.id,
+        amount: 1,
+        timestamp: Date.now()
+      };
+      roomState.draftState.timeRemaining = 60;
+      roomState.draftState.isActive = true;
+      roomState.draftState.isNominationPhase = false;
+      roomState.draftState.startingPrice = 1;
+      
+      draftRooms.set(roomId, roomState);
+      startAuctionTimer(roomId);
+      io.to(roomId).emit('player-nominated', roomState.draftState);
+      io.to(roomId).emit('auto-nomination', { player, team: nominatingTeam.name });
+    }
+  });
+}
+
 function completeSale(roomId) {
   const roomState = draftRooms.get(roomId);
   if (!roomState || !roomState.draftState.nominatedPlayer) return;
@@ -466,23 +549,29 @@ function completeSale(roomId) {
         round: roomState.draftState.currentRound
       });
 
+      // Winner of the auction gets to nominate next
       roomState.draftState.currentNominator = winningTeam.id;
       
       if (roomState.draftState.nominationOrder.length >= roomState.teams.length) {
         roomState.draftState.currentRound++;
         roomState.draftState.nominationOrder = [];
       }
+      
+      // Mark player as drafted in database
+      db.run('UPDATE players SET isDrafted = 1 WHERE id = ?', [nominatedPlayer.id]);
     }
   }
 
   roomState.draftState.nominatedPlayer = null;
   roomState.draftState.currentBids = [];
   roomState.draftState.highestBid = null;
-  roomState.draftState.timeRemaining = 0;
+  roomState.draftState.timeRemaining = 15; // Reset to nomination time
   roomState.draftState.isActive = false;
+  roomState.draftState.isNominationPhase = true;
   roomState.draftState.startingPrice = 1;
 
   draftRooms.set(roomId, roomState);
+  startNominationTimer(roomId); // Start next nomination timer
   io.to(roomId).emit('sale-completed', roomState);
 }
 
@@ -517,6 +606,7 @@ function createDefaultRoomState() {
       draftedPlayers: [],
       isPaused: false,
       isStarted: false,
+      isNominationPhase: false,
       startingPrice: 1,
       nominationOrder: []
     }
