@@ -41,17 +41,23 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
 
     socket.on('chat-message', (message) => {
       console.log('Received chat message:', message);
-      setChatMessages(prev => [...prev, message]);
+      setChatMessages(prev => {
+        // Avoid duplicate messages
+        if (prev.find(msg => msg.id === message.id)) {
+          return prev;
+        }
+        return [...prev, message];
+      });
     });
 
     socket.on('chat-history', (messages) => {
       console.log('Received chat history:', messages);
-      setChatMessages(messages);
+      setChatMessages(messages || []);
     });
 
     socket.on('error', (error) => {
       console.error('Socket error:', error);
-      alert(error);
+      console.log('Error details:', error);
     });
 
     socket.on('timer-warning', ({ timeRemaining, message }) => {
@@ -145,10 +151,13 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
 
   const handleSendChatMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Sending chat message:', chatMessage);
+    console.log('Sending chat message:', chatMessage, 'Socket connected:', !!socket);
     if (socket && chatMessage.trim()) {
+      console.log('Emitting chat message to room:', ROOM_ID);
       socket.emit('send-chat-message', ROOM_ID, chatMessage);
       setChatMessage('');
+    } else {
+      console.log('Cannot send message - socket:', !!socket, 'message:', chatMessage.trim());
     }
   };
   const handleStartDraft = () => {
@@ -783,17 +792,24 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                     </div>
                   )}
                 </div>
-                <form onSubmit={handleSendChatMessage} className="flex space-x-2">
+                <form onSubmit={handleSendChatMessage} className="flex space-x-2 mt-auto">
                   <input
                     type="text"
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
                     placeholder="Type a message..."
-                    className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500"
+                    className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-white focus:outline-none focus:border-blue-500"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSendChatMessage(e);
+                      }
+                    }}
                   />
                   <button 
                     type="submit"
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors flex items-center"
+                    disabled={!chatMessage.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors flex items-center"
                   >
                     <Send className="w-4 h-4" />
                   </button>
