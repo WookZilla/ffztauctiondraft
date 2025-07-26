@@ -90,7 +90,13 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
   useEffect(() => {
     if (socket && user) {
       console.log('Joining room with user:', user);
-      socket.emit('join-room', ROOM_ID, user);
+      socket.emit('join-room', ROOM_ID, {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        teamId: user.teamId,
+        teamName: user.teamName
+      });
     }
   }, [socket, user]);
   // Filter players based on current filters

@@ -10,13 +10,26 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
 app.use(cors());
 app.use(express.json());
+
+// Add root route to prevent "Cannot GET /" error
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Fantasy Football Auction Draft API',
+    version: '1.0.0',
+    endpoints: {
+      players: '/api/players',
+      login: '/api/auth/login',
+      room: '/api/room/:roomId'
+    }
+  });
+});
 
 // Initialize SQLite database
 const db = new sqlite3.Database(':memory:');

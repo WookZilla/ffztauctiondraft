@@ -33,17 +33,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       // Demo mode - mock authentication without backend
       const mockUsers = [
-        { id: 1, username: 'commissioner', password: 'draft2024', role: 'commissioner', teamName: 'Commissioner', teamLogo: '👑' },
-        { id: 2, username: 'user1', password: 'password1', role: 'user', teamName: 'Team 1', teamLogo: '🏈' },
-        { id: 3, username: 'user2', password: 'password2', role: 'user', teamName: 'Team 2', teamLogo: '⚡' },
-        { id: 4, username: 'user3', password: 'password3', role: 'user', teamName: 'Team 3', teamLogo: '🔥' },
-        { id: 5, username: 'user4', password: 'password4', role: 'user', teamName: 'Team 4', teamLogo: '🚀' },
+        { id: 'user-1', username: 'commissioner', password: 'draft2024', role: 'commissioner', teamId: 'team-1', teamName: 'Commissioner', teamLogo: '👑' },
+        { id: 'user-2', username: 'user1', password: 'password1', role: 'user', teamId: 'team-2', teamName: 'Team 1', teamLogo: '🏈' },
+        { id: 'user-3', username: 'user2', password: 'password2', role: 'user', teamId: 'team-3', teamName: 'Team 2', teamLogo: '⚡' },
+        { id: 'user-4', username: 'user3', password: 'password3', role: 'user', teamId: 'team-4', teamName: 'Team 3', teamLogo: '🔥' },
+        { id: 'user-5', username: 'user4', password: 'password4', role: 'user', teamId: 'team-5', teamName: 'Team 4', teamLogo: '🚀' },
       ];
       
       const user = mockUsers.find(u => u.username === username && u.password === password);
       
       if (user) {
-        const { password: _, ...userData } = user; // Remove password from user data
+        const { password: _, ...userData } = user;
         setUser(userData);
         localStorage.setItem('user', JSON.stringify(userData));
         return true;

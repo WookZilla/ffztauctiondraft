@@ -29,11 +29,21 @@ interface SocketProviderProps {
 
 export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [isConnected, setIsConnected] = useState(true); // Mock as connected for testing
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    // Connect to real socket server
-    const newSocket = io('http://localhost:3001');
+    // Connect to socket server with webcontainer-friendly configuration
+    const serverUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+    console.log('Attempting to connect to:', serverUrl);
+    
+    const newSocket = io(serverUrl, {
+      transports: ['polling', 'websocket'], // Try polling first, then websocket
+      timeout: 20000,
+      forceNew: true,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
     
     newSocket.on('connect', () => {
       console.log('Connected to server');
@@ -45,9 +55,15 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       setIsConnected(false);
     });
     
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setIsConnected(false);
+    });
+    
     setSocket(newSocket);
     
     return () => {
+      console.log('Cleaning up socket connection');
       newSocket.close();
     };
   }, []);

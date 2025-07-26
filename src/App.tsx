@@ -2,6 +2,7 @@ import React from 'react';
 import { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/Login';
 import MainDashboard from './components/MainDashboard';
 import SleeperDraftBoard from './components/SleeperDraftBoard';
@@ -15,7 +16,11 @@ const AppContent: React.FC = () => {
   }
 
   if (currentView === 'draft') {
-    return <SleeperDraftBoard onBackToDashboard={() => setCurrentView('dashboard')} />;
+    return (
+      <ErrorBoundary>
+        <SleeperDraftBoard onBackToDashboard={() => setCurrentView('dashboard')} />
+      </ErrorBoundary>
+    );
   }
 
   return <MainDashboard onEnterDraft={() => setCurrentView('draft')} />;
@@ -23,11 +28,13 @@ const AppContent: React.FC = () => {
 
 function App() {
   return (
-    <AuthProvider>
-      <SocketProvider>
-        <AppContent />
-      </SocketProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <SocketProvider>
+          <AppContent />
+        </SocketProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 
