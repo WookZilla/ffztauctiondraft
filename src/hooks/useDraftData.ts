@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useSocket } from '../context/SocketContext';
 import { Player, Team, DraftState } from '../types';
 
 // Mock data for demo mode
@@ -56,70 +57,109 @@ const mockDraftState: DraftState = {
 
 export const useDraftData = () => {
   const { user } = useAuth();
+  const { socket } = useSocket();
   const [players, setPlayers] = useState<Player[]>(mockPlayers);
   const [teams, setTeams] = useState<Team[]>(mockTeams);
   const [draftState, setDraftState] = useState<DraftState>(mockDraftState);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate loading delay for demo
-    const timer = setTimeout(() => {
-      setLoading(false);
-    }, 1000);
-
-    return () => clearTimeout(timer);
+    // Fetch real data from API
+    const fetchData = async () => {
+      try {
+        // Fetch players
+        const playersResponse = await fetch('http://localhost:3001/api/players');
+        if (playersResponse.ok) {
+          const playersData = await playersResponse.json();
+          console.log('Fetched players:', playersData.length);
+          setPlayers(playersData);
+        }
+        
+        // Fetch room state
+        const roomResponse = await fetch('http://localhost:3001/api/room/main-draft-room');
+        if (roomResponse.ok) {
+          const roomData = await roomResponse.json();
+          console.log('Fetched room data:', roomData);
+          setTeams(roomData.teams);
+          setDraftState(roomData.draftState);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
   }, []);
+  
+  // Socket event listeners
+  useEffect(() => {
+    if (!socket) return;
+    
+    socket.on('room-state', (roomState) => {
+      console.log('Received room state:', roomState);
+      setTeams(roomState.teams);
+      setDraftState(roomState.draftState);
+    });
+    
+    socket.on('room-updated', (roomState) => {
+      console.log('Room updated:', roomState);
+      setTeams(roomState.teams);
+      setDraftState(roomState.draftState);
+    });
+    
+    socket.on('draft-started', (newDraftState) => {
+      console.log('Draft started:', newDraftState);
+      setDraftState(newDraftState);
+    });
+    
+    socket.on('player-nominated', (newDraftState) => {
+      console.log('Player nominated:', newDraftState);
+      setDraftState(newDraftState);
+    });
+    
+    socket.on('bid-placed', (newDraftState) => {
+      console.log('Bid placed:', newDraftState);
+      setDraftState(newDraftState);
+    });
+    
+    socket.on('sale-completed', (roomState) => {
+      console.log('Sale completed:', roomState);
+      setTeams(roomState.teams);
+      setDraftState(roomState.draftState);
+    });
+
+    return () => {
+      socket.off('room-state');
+      socket.off('room-updated');
+      socket.off('draft-started');
+      socket.off('player-nominated');
+      socket.off('bid-placed');
+      socket.off('sale-completed');
+    };
+  }, [socket]);
 
   const nominatePlayer = (player: Player) => {
-    // Demo mode: simulate nomination
-    setDraftState(prev => ({
-      ...prev,
-      nominatedPlayer: player,
-      isActive: true,
-      timeRemaining: 30,
-      currentBids: []
-    }));
+    if (socket) {
+      socket.emit('nominate-player', 'main-draft-room', player, 1);
+    }
   };
 
   const placeBid = (amount: number, userId: string, username: string, teamName: string) => {
-    // Demo mode: simulate bid placement
-    const newBid = {
-      userId,
-      username,
-      teamName,
-      amount
-    };
-    
-    setDraftState(prev => ({
-      ...prev,
-      currentBids: [...prev.currentBids, newBid],
-      highestBid: newBid
-    }));
+    if (socket) {
+      socket.emit('place-bid', 'main-draft-room', {
+        userId,
+        username,
+        teamName,
+        amount
+      });
+    }
   };
 
   const completeSale = () => {
-    // Demo mode: simulate sale completion
-    if (draftState.nominatedPlayer && draftState.highestBid) {
-      const updatedTeams = teams.map(team => {
-        if (team.id === draftState.highestBid?.teamName) {
-          return {
-            ...team,
-            players: [...team.players, draftState.nominatedPlayer!],
-            budget: team.budget - draftState.highestBid.amount
-          };
-        }
-        return team;
-      });
-      
-      setTeams(updatedTeams);
-      setDraftState(prev => ({
-        ...prev,
-        nominatedPlayer: null,
-        currentBids: [],
-        highestBid: null,
-        isActive: false,
-        draftedPlayers: [...prev.draftedPlayers, prev.nominatedPlayer!]
-      }));
+    if (socket) {
+      socket.emit('complete-sale', 'main-draft-room');
     }
   };
 

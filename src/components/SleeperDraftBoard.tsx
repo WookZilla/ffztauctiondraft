@@ -40,11 +40,18 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
     if (!socket) return;
 
     socket.on('chat-message', (message) => {
+      console.log('Received chat message:', message);
       setChatMessages(prev => [...prev, message]);
     });
 
     socket.on('chat-history', (messages) => {
+      console.log('Received chat history:', messages);
       setChatMessages(messages);
+    });
+
+    socket.on('error', (error) => {
+      console.error('Socket error:', error);
+      alert(error);
     });
 
     socket.on('timer-warning', ({ timeRemaining, message }) => {
@@ -53,17 +60,20 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
     });
 
     socket.on('player-nominated', (newDraftState) => {
+      console.log('Player nominated event:', newDraftState);
       setSelectedPlayer(newDraftState.nominatedPlayer);
       setBidAmount((newDraftState.highestBid?.amount || 0) + 1);
     });
 
     socket.on('bid-placed', (newDraftState) => {
+      console.log('Bid placed event:', newDraftState);
       setBidAmount((newDraftState.highestBid?.amount || 0) + 1);
     });
 
     return () => {
       socket.off('chat-message');
       socket.off('chat-history');
+      socket.off('error');
       socket.off('timer-warning');
       socket.off('player-nominated');
       socket.off('bid-placed');
@@ -73,6 +83,7 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
   // Join room on component mount
   useEffect(() => {
     if (socket && user) {
+      console.log('Joining room with user:', user);
       socket.emit('join-room', ROOM_ID, user);
     }
   }, [socket, user]);
@@ -134,12 +145,14 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
 
   const handleSendChatMessage = (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('Sending chat message:', chatMessage);
     if (socket && chatMessage.trim()) {
       socket.emit('send-chat-message', ROOM_ID, chatMessage);
       setChatMessage('');
     }
   };
   const handleStartDraft = () => {
+    console.log('Starting draft...');
     if (socket) {
       socket.emit('start-draft', ROOM_ID);
     }
@@ -387,7 +400,8 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                   {/* Timer Display */}
                   <div className="text-center">
                     <div className={`text-3xl font-bold font-mono ${
-                      draftState.timeRemaining <= 10 ? 'text-red-400 animate-pulse' : 'text-white'
+                      team.ownerId === user?.id ? 'bg-orange-500' : 
+                      draftState.highestBid?.teamId === team.id ? 'bg-green-500' : 'bg-gray-600'
                     }`}>
                       {draftState.timeRemaining}
                     </div>
@@ -559,7 +573,7 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                           >
                             <Plus className="w-4 h-4" />
                           </button>
-                          <span className="text-sm font-medium">{index + 1}</span>
+                          <span className="text-sm font-medium">{player.rank}</span>
                         </div>
                       </td>
                       <td className="px-4 py-3">

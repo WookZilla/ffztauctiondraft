@@ -389,6 +389,19 @@ cron.schedule('0 6 * * *', () => {
   fetchSleeperPlayers();
 });
 
+// Initialize default room on server start
+const initializeDefaultRoom = () => {
+  const ROOM_ID = 'main-draft-room';
+  if (!draftRooms.has(ROOM_ID)) {
+    const defaultRoom = createDefaultRoomState();
+    draftRooms.set(ROOM_ID, defaultRoom);
+    console.log('Default draft room initialized');
+  }
+};
+
+// Call initialization
+initializeDefaultRoom();
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -399,10 +412,23 @@ io.on('connection', (socket) => {
     socket.userData = userData;
     console.log(`User ${userData.username} joined room ${roomId}`);
     
-    // Send current room state to the user
-    if (draftRooms.has(roomId)) {
-      socket.emit('room-state', draftRooms.get(roomId));
+    // Initialize room if it doesn't exist
+    if (!draftRooms.has(roomId)) {
+      draftRooms.set(roomId, createDefaultRoomState());
     }
+    
+    // Update team ownership
+    const roomState = draftRooms.get(roomId);
+    const userTeam = roomState.teams.find(team => team.ownerId === userData.id);
+    if (userTeam && userData.teamName) {
+      userTeam.name = userData.teamName;
+    }
+    
+    // Send current room state to the user
+    socket.emit('room-state', roomState);
+    
+    // Broadcast updated room state to all users
+    io.to(roomId).emit('room-updated', roomState);
     
     // Send recent chat messages
     db.all('SELECT * FROM chat_messages WHERE room_id = ? ORDER BY timestamp DESC LIMIT 50', [roomId], (err, messages) => {
@@ -414,12 +440,21 @@ io.on('connection', (socket) => {
 
   // Handle draft start (Commissioner only)
   socket.on('start-draft', (roomId) => {
+    console.log(`Start draft request from ${socket.userData?.username} (role: ${socket.userData?.role})`);
+    
     if (!socket.userData || socket.userData.role !== 'commissioner') {
       socket.emit('error', 'Only commissioners can start the draft');
+      console.log('Start draft denied - not commissioner');
       return;
     }
 
     const roomState = draftRooms.get(roomId) || createDefaultRoomState();
+    
+    if (roomState.draftState.isStarted) {
+      socket.emit('error', 'Draft has already been started');
+      return;
+    }
+    
     roomState.draftState.isStarted = true;
     roomState.draftState.isPaused = false;
     
@@ -432,6 +467,7 @@ io.on('connection', (socket) => {
     
     draftRooms.set(roomId, roomState);
     io.to(roomId).emit('draft-started', roomState.draftState);
+    io.to(roomId).emit('room-updated', roomState);
     console.log(`Draft started in room ${roomId} by ${socket.userData.username}`);
   });
 
@@ -581,7 +617,10 @@ io.on('connection', (socket) => {
 
   // Handle chat messages
   socket.on('send-chat-message', (roomId, message) => {
+    console.log(`Chat message from ${socket.userData?.username}: ${message}`);
+    
     if (!socket.userData || !message.trim()) {
+      console.log('Chat message rejected - no user data or empty message');
       return;
     }
     
@@ -609,6 +648,7 @@ io.on('connection', (socket) => {
     );
     stmt.finalize();
     
+    console.log('Chat message stored and broadcasting to room');
     // Broadcast to room
     io.to(roomId).emit('chat-message', chatMessage);
   });
@@ -788,6 +828,7 @@ app.put('/api/users/:userId/team', (req, res) => {
 });
 
 app.get('/api/players', (req, res) => {
+  console.log('API request for players');
   db.all(`SELECT *, 
     CASE 
       WHEN injuryStatus IS NOT NULL THEN json_object('status', injuryStatus, 'description', injuryDescription, 'news', newsUpdates)
@@ -795,10 +836,12 @@ app.get('/api/players', (req, res) => {
     END as injury
     FROM players ORDER BY rank ASC`, (err, rows) => {
     if (err) {
+      console.error('Database error fetching players:', err);
       res.status(500).json({ error: err.message });
       return;
     }
     
+    console.log(`Returning ${rows.length} players`);
     // Parse injury JSON for each player
     const playersWithInjury = rows.map(player => ({
       ...player,
@@ -847,8 +890,10 @@ app.post('/api/update-sleeper-data', (req, res) => {
 
 app.get('/api/room/:roomId', (req, res) => {
   const roomId = req.params.roomId;
+  console.log(`API request for room: ${roomId}`);
   const roomState = draftRooms.get(roomId) || createDefaultRoomState();
   draftRooms.set(roomId, roomState);
+  console.log(`Returning room state with ${roomState.teams.length} teams`);
   res.json(roomState);
 });
 
