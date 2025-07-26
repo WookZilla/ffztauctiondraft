@@ -27,10 +27,13 @@ export interface Player {
   injury?: {
     status: string;
     description: string;
+    news?: string;
   };
   sleeperId?: string;
   age?: number;
   experience?: number;
+  photoUrl?: string;
+  newsUpdates?: string;
 }
 
 export interface Bid {
@@ -39,6 +42,7 @@ export interface Bid {
   userId: string;
   username: string;
   teamName: string;
+  teamId: string;
   amount: number;
   timestamp: number;
 }
@@ -53,6 +57,8 @@ export interface DraftState {
   isActive: boolean;
   isPaused: boolean;
   isStarted: boolean;
+  startingPrice: number;
+  nominationOrder: string[];
   draftedPlayers: Array<{
     player: Player;
     winningBid: Bid;
@@ -60,6 +66,14 @@ export interface DraftState {
   }>;
 }
 
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  userId: string;
+  username: string;
+  message: string;
+  timestamp: number;
+}
 export interface AuctionRoom {
   id: string;
   name: string;

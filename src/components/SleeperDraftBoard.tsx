@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { useDraftData } from '../hooks/useDraftData';
-import { Clock, Plus, Search, MessageCircle, Settings, ArrowLeft, Star, TrendingUp, ChevronUp, ChevronDown, Play, Pause, MoreVertical } from 'lucide-react';
+import { Clock, Plus, Search, MessageCircle, Settings, ArrowLeft, Star, TrendingUp, ChevronUp, ChevronDown, Play, Pause, MoreVertical, Send, AlertTriangle, DollarSign } from 'lucide-react';
 import { Player, Team, Bid } from '../types';
 
 interface SleeperDraftBoardProps {
@@ -15,6 +15,7 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
   const { players, teams, draftState, loading, nominatePlayer, placeBid } = useDraftData();
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
   const [bidAmount, setBidAmount] = useState<number>(1);
+  const [startingPrice, setStartingPrice] = useState<number>(1);
   const [activeTab, setActiveTab] = useState<'queue' | 'results' | 'chat'>('queue');
   const [positionFilter, setPositionFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -25,11 +26,56 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
   const [queue, setQueue] = useState<Player[]>([]);
   const [isPlayerPoolCollapsed, setIsPlayerPoolCollapsed] = useState(false);
   const [showCommissionerMenu, setShowCommissionerMenu] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [showNominationModal, setShowNominationModal] = useState(false);
+  const [playerToNominate, setPlayerToNominate] = useState<Player | null>(null);
 
   const userTeam = teams.find(team => team.ownerId === user?.id);
   const positions = ['ALL', 'QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
   const ROOM_ID = 'main-draft-room';
 
+  // Socket event listeners
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('chat-message', (message) => {
+      setChatMessages(prev => [...prev, message]);
+    });
+
+    socket.on('chat-history', (messages) => {
+      setChatMessages(messages);
+    });
+
+    socket.on('timer-warning', ({ timeRemaining, message }) => {
+      // You could add sound alerts here
+      console.log(`Timer warning: ${message}`);
+    });
+
+    socket.on('player-nominated', (newDraftState) => {
+      setSelectedPlayer(newDraftState.nominatedPlayer);
+      setBidAmount((newDraftState.highestBid?.amount || 0) + 1);
+    });
+
+    socket.on('bid-placed', (newDraftState) => {
+      setBidAmount((newDraftState.highestBid?.amount || 0) + 1);
+    });
+
+    return () => {
+      socket.off('chat-message');
+      socket.off('chat-history');
+      socket.off('timer-warning');
+      socket.off('player-nominated');
+      socket.off('bid-placed');
+    };
+  }, [socket]);
+
+  // Join room on component mount
+  useEffect(() => {
+    if (socket && user) {
+      socket.emit('join-room', ROOM_ID, user);
+    }
+  }, [socket, user]);
   // Filter players based on current filters
   const filteredPlayers = players.filter(player => {
     const matchesSearch = player.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -41,6 +87,9 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
     return matchesSearch && matchesPosition && matchesWatchlist && !matchesDrafted && !matchesRookies;
   }).slice(0, 20);
 
+  const canNominate = draftState.currentNominator === userTeam?.id && !draftState.isActive && draftState.isStarted && !draftState.isPaused;
+  const canBid = userTeam && draftState.isActive && !draftState.isPaused;
+  const isMyTurn = draftState.currentNominator === userTeam?.id;
   const handleAddToQueue = (player: Player) => {
     if (!queue.find(p => p.id === player.id)) {
       setQueue([...queue, player]);
@@ -59,12 +108,37 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
     }
   };
 
+  const handleNominatePlayer = (player: Player) => {
+    setPlayerToNominate(player);
+    setStartingPrice(1);
+    setShowNominationModal(true);
+  };
+
+  const confirmNomination = () => {
+    if (socket && playerToNominate) {
+      socket.emit('nominate-player', ROOM_ID, playerToNominate, startingPrice);
+      setShowNominationModal(false);
+      setPlayerToNominate(null);
+    }
+  };
   const handleBid = (amount: number) => {
-    if (user && userTeam && selectedPlayer) {
-      placeBid(amount, user.id, user.username, userTeam.name);
+    if (socket && user && userTeam && canBid) {
+      socket.emit('place-bid', ROOM_ID, {
+        userId: user.id,
+        username: user.username,
+        teamName: userTeam.name,
+        amount: amount
+      });
     }
   };
 
+  const handleSendChatMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (socket && chatMessage.trim()) {
+      socket.emit('send-chat-message', ROOM_ID, chatMessage);
+      setChatMessage('');
+    }
+  };
   const handleStartDraft = () => {
     if (socket) {
       socket.emit('start-draft', ROOM_ID);
@@ -107,6 +181,11 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
               <Clock className="w-4 h-4" />
               <span>Round {draftState.currentRound}/15</span>
             </div>
+            {isMyTurn && canNominate && (
+              <div className="bg-orange-500 text-white px-3 py-1 rounded-full text-sm font-bold animate-pulse">
+                YOUR TURN TO NOMINATE
+              </div>
+            )}
           </div>
           <div className="flex items-center space-x-4">
             <div className="relative">
@@ -194,6 +273,12 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                   <div className="text-xs">
                     <span className="text-white font-semibold">MAX ${team.budget}</span>
                   </div>
+                  
+                  {draftState.highestBid?.teamId === team.id && (
+                    <div className="text-xs text-green-400 font-bold">
+                      HIGH BID: ${draftState.highestBid.amount}
+                    </div>
+                  )}
                 </div>
 
                 {/* Position slots */}
@@ -228,29 +313,55 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
           </div>
 
           {/* Current Auction */}
-          {selectedPlayer && (
+          {draftState.nominatedPlayer && (
             <div className="bg-gray-800 rounded-lg p-6 mb-4">
               <div className="flex items-center space-x-4 mb-4">
+                {draftState.nominatedPlayer.photoUrl ? (
+                  <img
+                    src={draftState.nominatedPlayer.photoUrl}
+                    alt={draftState.nominatedPlayer.name}
+                    className="w-20 h-20 rounded-lg object-cover"
+                    onError={(e) => {
+                      e.currentTarget.src = `https://via.placeholder.com/80x80/3B82F6/FFFFFF?text=${draftState.nominatedPlayer.name.charAt(0)}`;
+                    }}
+                  />
+                ) : (
                 <img
-                  src={`https://via.placeholder.com/80x80/3B82F6/FFFFFF?text=${selectedPlayer.name.charAt(0)}`}
-                  alt={selectedPlayer.name}
+                    src={`https://via.placeholder.com/80x80/3B82F6/FFFFFF?text=${draftState.nominatedPlayer.name.charAt(0)}`}
+                    alt={draftState.nominatedPlayer.name}
                   className="w-20 h-20 rounded-lg"
                 />
+                )}
                 <div className="flex-1">
-                  <h2 className="text-2xl font-bold">{selectedPlayer.name}</h2>
+                  <h2 className="text-2xl font-bold">{draftState.nominatedPlayer.name}</h2>
                   <div className="flex items-center space-x-2 text-gray-400">
-                    <span>{selectedPlayer.position}</span>
+                    <span>{draftState.nominatedPlayer.position}</span>
                     <span>•</span>
-                    <span>{selectedPlayer.team}</span>
+                    <span>{draftState.nominatedPlayer.team}</span>
                     <span>•</span>
-                    <span>Proj ${selectedPlayer.projectedPoints}</span>
+                    <span>Proj {draftState.nominatedPlayer.projectedPoints}</span>
                   </div>
+                  
+                  {/* Injury Status */}
+                  {draftState.nominatedPlayer.injury && (
+                    <div className="flex items-center space-x-2 mt-2">
+                      <AlertTriangle className="w-4 h-4 text-red-400" />
+                      <span className="text-red-400 text-sm font-medium">
+                        {draftState.nominatedPlayer.injury.status}
+                      </span>
+                      {draftState.nominatedPlayer.injury.description && (
+                        <span className="text-gray-400 text-sm">
+                          - {draftState.nominatedPlayer.injury.description}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   
                   {/* Player Stats */}
                   <div className="grid grid-cols-5 gap-4 mt-3 text-center">
                     <div>
                       <div className="text-sm text-gray-400">POINTS</div>
-                      <div className="font-bold">{selectedPlayer.projectedPoints}</div>
+                      <div className="font-bold">{draftState.nominatedPlayer.projectedPoints}</div>
                     </div>
                     <div>
                       <div className="text-sm text-gray-400">RUSH</div>
@@ -273,6 +384,16 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
 
                 {/* Bidding Controls */}
                 <div className="flex items-center space-x-4">
+                  {/* Timer Display */}
+                  <div className="text-center">
+                    <div className={`text-3xl font-bold font-mono ${
+                      draftState.timeRemaining <= 10 ? 'text-red-400 animate-pulse' : 'text-white'
+                    }`}>
+                      {draftState.timeRemaining}
+                    </div>
+                    <div className="text-xs text-gray-400">SECONDS</div>
+                  </div>
+                  
                   <div className="text-center">
                     <div className="text-2xl font-bold text-green-400">
                       ${draftState.highestBid?.amount || 1}
@@ -282,20 +403,29 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                     </div>
                   </div>
                   
-                  <button className="w-12 h-12 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center">
-                    <Plus className="w-6 h-6" />
-                  </button>
-                  
-                  <button
-                    onClick={() => handleBid((draftState.highestBid?.amount || 0) + 1)}
-                    className="bg-blue-600 hover:bg-blue-700 px-8 py-3 rounded-full font-bold transition-colors"
-                  >
-                    OFFER ${(draftState.highestBid?.amount || 0) + 1}
-                  </button>
-                  
-                  <button className="bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-full font-bold transition-colors">
-                    PASS
-                  </button>
+                  {canBid && (
+                    <>
+                      <div className="flex items-center space-x-2">
+                        <DollarSign className="w-5 h-5 text-gray-400" />
+                        <input
+                          type="number"
+                          value={bidAmount}
+                          onChange={(e) => setBidAmount(parseInt(e.target.value) || 1)}
+                          min={(draftState.highestBid?.amount || 0) + 1}
+                          max={userTeam?.budget || 200}
+                          className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-center text-white"
+                        />
+                      </div>
+                      
+                      <button
+                        onClick={() => handleBid(bidAmount)}
+                        disabled={bidAmount <= (draftState.highestBid?.amount || 0) || bidAmount > (userTeam?.budget || 0)}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed px-6 py-3 rounded-full font-bold transition-colors"
+                      >
+                        BID ${bidAmount}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -434,14 +564,33 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center space-x-3">
+                          {player.photoUrl ? (
+                            <img
+                              src={player.photoUrl}
+                              alt={player.name}
+                              className="w-8 h-8 rounded object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = `https://via.placeholder.com/32x32/3B82F6/FFFFFF?text=${player.name.charAt(0)}`;
+                              }}
+                            />
+                          ) : (
                           <img
                             src={`https://via.placeholder.com/32x32/3B82F6/FFFFFF?text=${player.name.charAt(0)}`}
                             alt={player.name}
                             className="w-8 h-8 rounded"
                           />
+                          )}
                           <div>
                             <div className="font-medium">{player.name}</div>
-                            <div className="text-sm text-gray-400">{player.position} • {player.team}</div>
+                            <div className="text-sm text-gray-400 flex items-center space-x-2">
+                              <span>{player.position} • {player.team}</span>
+                              {player.injury && (
+                                <span className="text-red-400 text-xs">
+                                  <AlertTriangle className="w-3 h-3 inline mr-1" />
+                                  {player.injury.status}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -458,17 +607,30 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                       <td className="px-4 py-3 text-center text-sm">-</td>
                       <td className="px-4 py-3 text-center text-sm">-</td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleWatchlist(player.id);
-                          }}
-                          className={`${
-                            watchlist.includes(player.id) ? 'text-yellow-400' : 'text-gray-400'
-                          } hover:text-yellow-400`}
-                        >
-                          <Star className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleWatchlist(player.id);
+                            }}
+                            className={`${
+                              watchlist.includes(player.id) ? 'text-yellow-400' : 'text-gray-400'
+                            } hover:text-yellow-400`}
+                          >
+                            <Star className="w-4 h-4" />
+                          </button>
+                          {canNominate && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleNominatePlayer(player);
+                              }}
+                              className="bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded text-xs font-bold"
+                            >
+                              NOMINATE
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -497,6 +659,11 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                 }`}
               >
                 {tab.label}
+                {tab.id === 'chat' && chatMessages.length > 0 && (
+                  <span className="ml-1 bg-blue-500 text-white text-xs rounded-full px-1">
+                    {chatMessages.length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -522,22 +689,43 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
                       >
                         <div className="flex items-center space-x-3">
                           <span className="text-sm text-gray-400">{index + 1}</span>
+                          {player.photoUrl ? (
+                            <img
+                              src={player.photoUrl}
+                              alt={player.name}
+                              className="w-8 h-8 rounded object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = `https://via.placeholder.com/32x32/3B82F6/FFFFFF?text=${player.name.charAt(0)}`;
+                              }}
+                            />
+                          ) : (
                           <img
                             src={`https://via.placeholder.com/32x32/3B82F6/FFFFFF?text=${player.name.charAt(0)}`}
                             alt={player.name}
                             className="w-8 h-8 rounded"
                           />
+                          )}
                           <div>
                             <div className="font-medium text-sm">{player.name}</div>
                             <div className="text-xs text-gray-400">{player.position} • {player.team}</div>
                           </div>
                         </div>
-                        <button
-                          onClick={() => handleRemoveFromQueue(player.id)}
-                          className="text-gray-400 hover:text-red-400"
-                        >
-                          ×
-                        </button>
+                        <div className="flex items-center space-x-2">
+                          {canNominate && (
+                            <button
+                              onClick={() => handleNominatePlayer(player)}
+                              className="bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded text-xs font-bold"
+                            >
+                              NOMINATE
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleRemoveFromQueue(player.id)}
+                            className="text-gray-400 hover:text-red-400"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -562,27 +750,114 @@ const SleeperDraftBoard: React.FC<SleeperDraftBoardProps> = ({ onBackToDashboard
             )}
 
             {activeTab === 'chat' && (
-              <div className="flex flex-col h-full">
-                <div className="flex-1 space-y-2 mb-4">
-                  <div className="p-2 bg-gray-700 rounded text-sm">
-                    <span className="text-blue-400 font-medium">Commissioner:</span> Draft starting soon!
-                  </div>
+              <div className="flex flex-col h-full max-h-96">
+                <div className="flex-1 space-y-2 mb-4 overflow-y-auto">
+                  {chatMessages.map((msg) => (
+                    <div key={msg.id} className="p-2 bg-gray-700 rounded text-sm">
+                      <span className={`font-medium ${
+                        msg.username === user?.username ? 'text-orange-400' : 'text-blue-400'
+                      }`}>
+                        {msg.username}:
+                      </span>
+                      <span className="ml-2">{msg.message}</span>
+                    </div>
+                  ))}
+                  {chatMessages.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <MessageCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p>No messages yet</p>
+                    </div>
+                  )}
                 </div>
-                <div className="flex space-x-2">
+                <form onSubmit={handleSendChatMessage} className="flex space-x-2">
                   <input
                     type="text"
+                    value={chatMessage}
+                    onChange={(e) => setChatMessage(e.target.value)}
                     placeholder="Type a message..."
                     className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500"
                   />
-                  <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors">
-                    Send
+                  <button 
+                    type="submit"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition-colors flex items-center"
+                  >
+                    <Send className="w-4 h-4" />
                   </button>
-                </div>
+                </form>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Nomination Modal */}
+      {showNominationModal && playerToNominate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96">
+            <h3 className="text-xl font-bold mb-4">Nominate Player</h3>
+            <div className="flex items-center space-x-4 mb-4">
+              {playerToNominate.photoUrl ? (
+                <img
+                  src={playerToNominate.photoUrl}
+                  alt={playerToNominate.name}
+                  className="w-16 h-16 rounded-lg object-cover"
+                  onError={(e) => {
+                    e.currentTarget.src = `https://via.placeholder.com/64x64/3B82F6/FFFFFF?text=${playerToNominate.name.charAt(0)}`;
+                  }}
+                />
+              ) : (
+                <img
+                  src={`https://via.placeholder.com/64x64/3B82F6/FFFFFF?text=${playerToNominate.name.charAt(0)}`}
+                  alt={playerToNominate.name}
+                  className="w-16 h-16 rounded-lg"
+                />
+              )}
+              <div>
+                <h4 className="font-bold">{playerToNominate.name}</h4>
+                <p className="text-gray-400">{playerToNominate.position} • {playerToNominate.team}</p>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Starting Price
+              </label>
+              <div className="relative">
+                <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="number"
+                  value={startingPrice}
+                  onChange={(e) => setStartingPrice(Math.max(1, parseInt(e.target.value) || 1))}
+                  min={1}
+                  max={userTeam?.budget || 200}
+                  className="w-full pl-10 pr-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                Your budget: ${userTeam?.budget || 0}
+              </p>
+            </div>
+            
+            <div className="flex space-x-3">
+              <button
+                onClick={confirmNomination}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                Nominate for ${startingPrice}
+              </button>
+              <button
+                onClick={() => {
+                  setShowNominationModal(false);
+                  setPlayerToNominate(null);
+                }}
+                className="flex-1 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+                  </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -158,7 +158,4 @@ For support, please open an issue on GitHub or contact the development team.
 
 ---
 
-**Built with ❤️ for fantasy football enthusiasts** 
-Testing deployment from Windows! 
- 
-## Test Change - Fri 07/25/2025 20:10:45.90 
+**Built with ❤️ for fantasy football enthusiasts**

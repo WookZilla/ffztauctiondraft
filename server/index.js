@@ -97,6 +97,15 @@ db.serialize(() => {
 });
 
 // Pre-register users (run this once to set up your league)
+  db.run(`CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    message TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    FOREIGN KEY (room_id) REFERENCES draft_rooms (id)
+  )`);
 const preRegisteredUsers = [
   { username: 'commissioner', password: 'draft2024', role: 'commissioner', teamName: 'Commissioner Team' },
   { username: 'user1', password: 'password1', role: 'user', teamName: 'Team Alpha' },
@@ -149,6 +158,7 @@ db.serialize(() => {
 const draftRooms = new Map();
 const timers = new Map();
 
+// Enhanced Sleeper API functions with injury and news data
 // Sleeper API functions
 async function fetchSleeperPlayers() {
   try {
@@ -174,16 +184,20 @@ async function fetchSleeperPlayers() {
     const trendingResponse = await axios.get('https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=24&limit=25');
     const trendingPlayers = trendingResponse.data || [];
 
+    // Fetch injury reports from ESPN (mock for now)
+    const injuryReports = await fetchInjuryReports();
     // Store players in database
     const stmt = db.prepare(`INSERT OR REPLACE INTO players 
-      (id, name, position, team, rank, projectedPoints, adp, byeWeek, lastYearPoints, sleeperId, age, experience, injuryStatus, injuryDescription) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      (id, name, position, team, rank, projectedPoints, adp, byeWeek, lastYearPoints, sleeperId, age, experience, injuryStatus, injuryDescription, newsUpdates, photoUrl) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
     let rank = 1;
     relevantPlayers.forEach((player) => {
       const primaryPosition = player.fantasy_positions ? player.fantasy_positions[0] : 'FLEX';
       const projectedPoints = calculateProjectedPoints(player, primaryPosition);
       const lastYearPoints = player.stats ? (player.stats['2023'] ? calculateFantasyPoints(player.stats['2023']) : null) : null;
+      const injuryInfo = injuryReports[player.player_id] || {};
+      const photoUrl = `https://sleepercdn.com/content/nfl/players/thumb/${player.player_id}.jpg`;
       
       stmt.run(
         player.player_id,
@@ -198,8 +212,10 @@ async function fetchSleeperPlayers() {
         player.player_id,
         player.age,
         player.years_exp,
-        player.injury_status || null,
-        player.injury_notes || null
+        player.injury_status || injuryInfo.status || null,
+        player.injury_notes || injuryInfo.description || null,
+        injuryInfo.news || null,
+        photoUrl
       );
     });
 
@@ -213,6 +229,24 @@ async function fetchSleeperPlayers() {
   }
 }
 
+// Fetch injury reports (mock implementation)
+async function fetchInjuryReports() {
+  try {
+    // In a real implementation, you'd fetch from ESPN, NFL.com, or another source
+    // For now, return mock injury data
+    return {
+      // Mock injury data
+      'sample_player_id': {
+        status: 'Questionable',
+        description: 'Ankle injury',
+        news: 'Expected to play this week'
+      }
+    };
+  } catch (error) {
+    console.error('Error fetching injury reports:', error);
+    return {};
+  }
+}
 // Calculate projected fantasy points based on position and stats
 function calculateProjectedPoints(player, position) {
   if (!player.stats || !player.stats['2023']) {
@@ -269,10 +303,11 @@ async function createMockPlayerData() {
   ];
 
   const stmt = db.prepare(`INSERT OR REPLACE INTO players 
-    (id, name, position, team, rank, projectedPoints, adp, byeWeek, lastYearPoints, sleeperId, age, experience) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (id, name, position, team, rank, projectedPoints, adp, byeWeek, lastYearPoints, sleeperId, age, experience, photoUrl) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
   mockPlayers.forEach((player, index) => {
+    const photoUrl = `https://via.placeholder.com/150x150/3B82F6/FFFFFF?text=${player.name.split(' ').map(n => n.charAt(0)).join('')}`;
       stmt.run(
         `player-${index + 1}`,
         player.name,
@@ -285,7 +320,8 @@ async function createMockPlayerData() {
         player.lastYearPoints,
         `sleeper-${index + 1}`,
         25 + Math.floor(Math.random() * 10),
-        Math.floor(Math.random() * 15)
+        Math.floor(Math.random() * 15),
+        photoUrl
       );
     });
 
@@ -367,6 +403,13 @@ io.on('connection', (socket) => {
     if (draftRooms.has(roomId)) {
       socket.emit('room-state', draftRooms.get(roomId));
     }
+    
+    // Send recent chat messages
+    db.all('SELECT * FROM chat_messages WHERE room_id = ? ORDER BY timestamp DESC LIMIT 50', [roomId], (err, messages) => {
+      if (!err && messages) {
+        socket.emit('chat-history', messages.reverse());
+      }
+    });
   });
 
   // Handle draft start (Commissioner only)
@@ -379,6 +422,13 @@ io.on('connection', (socket) => {
     const roomState = draftRooms.get(roomId) || createDefaultRoomState();
     roomState.draftState.isStarted = true;
     roomState.draftState.isPaused = false;
+    
+    // Randomly select first nominator for round 1
+    const randomTeamIndex = Math.floor(Math.random() * roomState.teams.length);
+    roomState.draftState.currentNominator = roomState.teams[randomTeamIndex].id;
+    roomState.draftState.nominationOrder = [roomState.teams[randomTeamIndex].id];
+    
+    console.log(`First nominator: ${roomState.teams[randomTeamIndex].name}`);
     
     draftRooms.set(roomId, roomState);
     io.to(roomId).emit('draft-started', roomState.draftState);
@@ -413,7 +463,7 @@ io.on('connection', (socket) => {
     console.log(`Draft ${roomState.draftState.isPaused ? 'paused' : 'resumed'} in room ${roomId}`);
   });
   // Handle player nomination
-  socket.on('nominate-player', (roomId, player) => {
+  socket.on('nominate-player', (roomId, player, startingPrice = 1) => {
     const roomState = draftRooms.get(roomId) || createDefaultRoomState();
     
     // Check if draft is started and not paused
@@ -427,13 +477,33 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // Check if it's the correct team's turn to nominate
+    const nominatingTeam = roomState.teams.find(team => team.ownerId === socket.userData.id);
+    if (!nominatingTeam || nominatingTeam.id !== roomState.draftState.currentNominator) {
+      socket.emit('error', 'It is not your turn to nominate');
+      return;
+    }
+    
+    // Validate starting price
+    const validStartingPrice = Math.max(1, Math.min(startingPrice, nominatingTeam.budget));
+    
     console.log(`Player nominated in room ${roomId}:`, player.name);
     
     roomState.draftState.nominatedPlayer = player;
     roomState.draftState.currentBids = [];
-    roomState.draftState.highestBid = null;
-    roomState.draftState.timeRemaining = 60;
+    roomState.draftState.highestBid = {
+      id: `starting-bid-${Date.now()}`,
+      playerId: player.id,
+      userId: socket.userData.id,
+      username: socket.userData.username,
+      teamName: nominatingTeam.name,
+      teamId: nominatingTeam.id,
+      amount: validStartingPrice,
+      timestamp: Date.now()
+    };
+    roomState.draftState.timeRemaining = 30; // Enhanced timer - 30 seconds initial
     roomState.draftState.isActive = true;
+    roomState.draftState.startingPrice = validStartingPrice;
     
     draftRooms.set(roomId, roomState);
     
@@ -454,6 +524,11 @@ io.on('connection', (socket) => {
     
     console.log(`Bid placed in room ${roomId}:`, bidData);
     
+    const biddingTeam = roomState.teams.find(team => team.ownerId === bidData.userId);
+    if (!biddingTeam) {
+      socket.emit('bid-error', 'Team not found');
+      return;
+    }
 
     const newBid = {
       id: `bid-${Date.now()}-${socket.id}`,
@@ -461,6 +536,7 @@ io.on('connection', (socket) => {
       userId: bidData.userId,
       username: bidData.username,
       teamName: bidData.teamName,
+      teamId: biddingTeam.id,
       amount: bidData.amount,
       timestamp: Date.now()
     };
@@ -475,7 +551,7 @@ io.on('connection', (socket) => {
     // Add bid to room state
     roomState.draftState.currentBids.push(newBid);
     roomState.draftState.highestBid = newBid;
-    roomState.draftState.timeRemaining = 5; // Reset to 5 seconds after bid
+    roomState.draftState.timeRemaining = Math.max(5, roomState.draftState.timeRemaining); // Enhanced timer logic
 
     draftRooms.set(roomId, roomState);
 
@@ -496,11 +572,45 @@ io.on('connection', (socket) => {
     );
     stmt.finalize();
 
-    // Restart timer with 5 seconds
+    // Restart timer
     startAuctionTimer(roomId);
     
     // Broadcast bid to all users in the room
     io.to(roomId).emit('bid-placed', roomState.draftState);
+  });
+
+  // Handle chat messages
+  socket.on('send-chat-message', (roomId, message) => {
+    if (!socket.userData || !message.trim()) {
+      return;
+    }
+    
+    const chatMessage = {
+      id: `msg-${Date.now()}-${socket.id}`,
+      roomId,
+      userId: socket.userData.id,
+      username: socket.userData.username,
+      message: message.trim(),
+      timestamp: Date.now()
+    };
+    
+    // Store in database
+    const stmt = db.prepare(`INSERT INTO chat_messages 
+      (id, room_id, user_id, username, message, timestamp) 
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    
+    stmt.run(
+      chatMessage.id,
+      chatMessage.roomId,
+      chatMessage.userId,
+      chatMessage.username,
+      chatMessage.message,
+      chatMessage.timestamp
+    );
+    stmt.finalize();
+    
+    // Broadcast to room
+    io.to(roomId).emit('chat-message', chatMessage);
   });
 
   // Handle disconnection
@@ -509,7 +619,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// Timer management
+// Enhanced timer management
 function startAuctionTimer(roomId) {
   // Clear existing timer
   if (timers.has(roomId)) {
@@ -521,6 +631,13 @@ function startAuctionTimer(roomId) {
 
   const timer = setInterval(() => {
     roomState.draftState.timeRemaining--;
+    
+    // Enhanced timer alerts
+    if (roomState.draftState.timeRemaining === 10) {
+      io.to(roomId).emit('timer-warning', { timeRemaining: 10, message: '10 seconds remaining!' });
+    } else if (roomState.draftState.timeRemaining === 5) {
+      io.to(roomId).emit('timer-warning', { timeRemaining: 5, message: '5 seconds remaining!' });
+    }
     
     if (roomState.draftState.timeRemaining <= 0) {
       // Time's up - complete the sale
@@ -558,6 +675,13 @@ function completeSale(roomId) {
 
       // Set next nominator to the winning team
       roomState.draftState.currentNominator = winningTeam.id;
+      
+      // Check if round is complete (all teams have nominated)
+      if (roomState.draftState.nominationOrder.length >= roomState.teams.length) {
+        roomState.draftState.currentRound++;
+        roomState.draftState.nominationOrder = [];
+        // Winner of last auction starts next round
+      }
     }
   }
 
@@ -567,6 +691,7 @@ function completeSale(roomId) {
   roomState.draftState.highestBid = null;
   roomState.draftState.timeRemaining = 0;
   roomState.draftState.isActive = false;
+  roomState.draftState.startingPrice = 1;
 
   draftRooms.set(roomId, roomState);
 
@@ -602,9 +727,11 @@ function createDefaultRoomState() {
       highestBid: null,
       timeRemaining: 0,
       isActive: false,
-      draftedPlayers: []
+      draftedPlayers: [],
       isPaused: false,
-      isStarted: false
+      isStarted: false,
+      startingPrice: 1,
+      nominationOrder: []
     }
   };
 }
@@ -621,6 +748,11 @@ app.post('/api/auth/login', (req, res) => {
       res.status(500).json({ error: err.message });
       return;
     }
+// Schedule hourly injury updates
+cron.schedule('0 * * * *', () => {
+  console.log('Running hourly injury update...');
+  fetchSleeperPlayers();
+});
     
     if (user) {
       console.log('User found:', user);
@@ -658,7 +790,7 @@ app.put('/api/users/:userId/team', (req, res) => {
 app.get('/api/players', (req, res) => {
   db.all(`SELECT *, 
     CASE 
-      WHEN injuryStatus IS NOT NULL THEN json_object('status', injuryStatus, 'description', injuryDescription)
+      WHEN injuryStatus IS NOT NULL THEN json_object('status', injuryStatus, 'description', injuryDescription, 'news', newsUpdates)
       ELSE NULL 
     END as injury
     FROM players ORDER BY rank ASC`, (err, rows) => {
@@ -712,6 +844,7 @@ app.post('/api/update-sleeper-data', (req, res) => {
     res.status(500).json({ error: err.message });
   });
 });
+
 app.get('/api/room/:roomId', (req, res) => {
   const roomId = req.params.roomId;
   const roomState = draftRooms.get(roomId) || createDefaultRoomState();
@@ -740,6 +873,19 @@ app.post('/api/room/:roomId/join', (req, res) => {
   }
 
   res.json(roomState);
+});
+
+// Get chat messages for a room
+app.get('/api/room/:roomId/chat', (req, res) => {
+  const roomId = req.params.roomId;
+  
+  db.all('SELECT * FROM chat_messages WHERE room_id = ? ORDER BY timestamp DESC LIMIT 100', [roomId], (err, messages) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(messages.reverse());
+  });
 });
 
 const PORT = process.env.PORT || 3001;
